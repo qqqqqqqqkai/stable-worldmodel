@@ -16,3 +16,5 @@ wandb:
     id: ${subdir}
     resume: allow
     log_model: False
+tensorboard:
+  enabled: false

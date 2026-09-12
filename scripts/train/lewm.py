@@ -7,7 +7,7 @@ import stable_pretraining as spt
 from stable_pretraining import data as dt
 import stable_worldmodel as swm
 import torch
-from lightning.pytorch.loggers import WandbLogger
+from lightning.pytorch.loggers import TensorBoardLogger, WandbLogger
 from omegaconf import OmegaConf, open_dict
 
 from functools import partial
@@ -178,10 +178,23 @@ def run(cfg):
         swm.data.utils.get_cache_dir(sub_folder='checkpoints'), run_id
     )
 
-    logger = None
+    loggers = []
     if cfg.wandb.enabled:
-        logger = WandbLogger(**cfg.wandb.config)
-        logger.log_hyperparams(OmegaConf.to_container(cfg))
+        loggers.append(WandbLogger(**cfg.wandb.config))
+    if cfg.tensorboard.enabled:
+        loggers.append(
+            TensorBoardLogger(
+                save_dir=swm.data.utils.get_cache_dir(
+                    sub_folder='tensorboard'
+                ),
+                name=cfg.output_model_name,
+                version=run_id or None,
+                default_hp_metric=False,
+            )
+        )
+    for experiment_logger in loggers:
+        experiment_logger.log_hyperparams(OmegaConf.to_container(cfg))
+    logger = loggers if len(loggers) > 1 else (loggers[0] if loggers else None)
 
     run_dir.mkdir(parents=True, exist_ok=True)
     with open(run_dir / 'config.yaml', 'w') as f:

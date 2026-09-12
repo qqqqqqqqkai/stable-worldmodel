@@ -11,7 +11,7 @@ from lightning.pytorch.callbacks import Callback
 from functools import partial
 from stable_worldmodel.data import column_normalizer as get_column_normalizer
 from stable_worldmodel.wm.utils import save_pretrained
-from lightning.pytorch.loggers import WandbLogger
+from lightning.pytorch.loggers import TensorBoardLogger, WandbLogger
 from omegaconf import OmegaConf, open_dict
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
@@ -288,10 +288,25 @@ def run(cfg):
     with open(run_dir / 'config.yaml', 'w') as f:
         OmegaConf.save(cfg, f)
 
-    wandb_logger = None
+    loggers = []
     if cfg.wandb.enabled:
-        wandb_logger = WandbLogger(**cfg.wandb.config)
-        wandb_logger.log_hyperparams(OmegaConf.to_container(cfg))
+        loggers.append(WandbLogger(**cfg.wandb.config))
+    if cfg.tensorboard.enabled:
+        loggers.append(
+            TensorBoardLogger(
+                save_dir=swm.data.utils.get_cache_dir(
+                    sub_folder='tensorboard'
+                ),
+                name=cfg.output_model_name,
+                version=run_id or None,
+                default_hp_metric=False,
+            )
+        )
+    for experiment_logger in loggers:
+        experiment_logger.log_hyperparams(OmegaConf.to_container(cfg))
+    trainer_logger = (
+        loggers if len(loggers) > 1 else (loggers[0] if loggers else None)
+    )
 
     trainer = pl.Trainer(
         **cfg.trainer,
@@ -304,7 +319,7 @@ def run(cfg):
             pl.pytorch.callbacks.LearningRateMonitor(logging_interval='step'),
         ],
         num_sanity_val_steps=1,
-        logger=wandb_logger,
+        logger=trainer_logger,
         enable_checkpointing=True,
     )
 
