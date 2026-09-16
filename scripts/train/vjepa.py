@@ -156,6 +156,15 @@ def run(cfg):
         lengths=[cfg.train_split, 1 - cfg.train_split],
         generator=generator,
     )
+    full_train_size, full_val_size = len(train_set), len(val_set)
+    train_set = swm.data.take_dataset_fraction(
+        train_set, cfg.train_data_fraction
+    )
+    val_set = swm.data.take_dataset_fraction(val_set, cfg.val_data_fraction)
+    print(
+        f'Dataset split: train={len(train_set)}/{full_train_size}, '
+        f'val={len(val_set)}/{full_val_size}'
+    )
     train_loader = torch.utils.data.DataLoader(
         train_set, **cfg.loader, generator=generator
     )

@@ -48,6 +48,16 @@ def ensure_dir_exists(path: Path):
         path.mkdir(parents=True, exist_ok=True)
 
 
+def take_dataset_fraction(dataset, fraction: float):
+    """Keep a deterministic prefix of an already-randomized dataset split."""
+    if not 0 < fraction <= 1:
+        raise ValueError(f'fraction must be in (0, 1], got {fraction}')
+    if fraction == 1:
+        return dataset
+    size = max(1, int(len(dataset) * fraction))
+    return torch.utils.data.Subset(dataset, range(size))
+
+
 def load_dataset(
     name: str,
     cache_dir: str = None,
@@ -511,6 +521,7 @@ __all__ = [
     'merge',
     'get_cache_dir',
     'ensure_dir_exists',
+    'take_dataset_fraction',
     'IdentityScaler',
     'PercentileScaler',
     'ZScoreScaler',

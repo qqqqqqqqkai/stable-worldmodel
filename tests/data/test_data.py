@@ -11,7 +11,20 @@ import pytest
 import torch
 
 from stable_worldmodel.data import HDF5Dataset
-from stable_worldmodel.data.utils import get_cache_dir
+from stable_worldmodel.data.utils import get_cache_dir, take_dataset_fraction
+
+
+def test_take_dataset_fraction():
+    dataset = list(range(10))
+
+    assert take_dataset_fraction(dataset, 1.0) is dataset
+    assert list(take_dataset_fraction(dataset, 0.3)) == [0, 1, 2]
+
+
+@pytest.mark.parametrize('fraction', [0, -0.1, 1.1])
+def test_take_dataset_fraction_rejects_invalid_values(fraction):
+    with pytest.raises(ValueError, match='fraction must be in'):
+        take_dataset_fraction(list(range(10)), fraction)
 
 
 def test_get_cache_dir_default():
