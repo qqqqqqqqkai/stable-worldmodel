@@ -73,6 +73,13 @@ class VJEPA(nn.Module):
             info['act_emb'] = self.action_encoder(info['action'])
         return info
 
+    def encode_goal(self, info: dict) -> dict:
+        """Encode planning goals in the EMA target latent space."""
+        info['emb'] = self._encode_pixels(
+            info['pixels'], self.target_encoder, self.target_projector
+        )
+        return info
+
     def infer_target(self, pixels: torch.Tensor) -> tuple[torch.Tensor, ...]:
         """Return q mean and learned input-dependent log variance."""
         with torch.no_grad():

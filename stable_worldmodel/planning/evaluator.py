@@ -36,7 +36,8 @@ def flat_goal_encode(model: Dynamics, info_dict: dict) -> torch.Tensor:
 
     goal.pop('action')
     goal.pop('action_history', None)  # past blocks are context, not goal
-    goal = model.encode(goal)
+    encode_goal = getattr(model, 'encode_goal', None)
+    goal = encode_goal(goal) if callable(encode_goal) else model.encode(goal)
     return goal['emb']
 
 

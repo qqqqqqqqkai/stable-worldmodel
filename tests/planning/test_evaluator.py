@@ -172,6 +172,23 @@ def test_goal_encode_drops_action_history():
     assert seen and all('action_history' not in keys for keys in seen)
 
 
+def test_flat_goal_encode_prefers_model_goal_encoder():
+    model = FakeLeWM()
+    info = _make_info_dict()
+    ac = _make_action_candidates()
+    calls = []
+
+    def encode_goal(goal_dict):
+        calls.append(set(goal_dict))
+        return model.encode(goal_dict)
+
+    model.encode_goal = encode_goal
+    cost = ShootingCostEvaluator(model, GoalMSE()).get_cost(_clone(info), ac)
+
+    assert cost.shape == (B, S)
+    assert calls and all('action_history' not in keys for keys in calls)
+
+
 # ---------------------------------------------------------------------------
 # Constraints: feature-detected via attribute presence
 # ---------------------------------------------------------------------------

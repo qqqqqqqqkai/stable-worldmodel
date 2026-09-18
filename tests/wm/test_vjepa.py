@@ -160,6 +160,21 @@ def test_target_mean_is_ema_updated_and_stays_in_eval_mode():
     )
 
 
+def test_goal_encoding_uses_ema_target_modules():
+    model = _model()
+    pixels = torch.randn(2, 1, 3, 8, 8)
+
+    with torch.no_grad():
+        model.encoder.proj.weight.add_(1.0)
+
+    online = model.encode({'pixels': pixels.clone()})['emb']
+    goal = model.encode_goal({'pixels': pixels.clone()})['emb']
+    expected = model.infer_target(pixels)[0]
+
+    torch.testing.assert_close(goal, expected)
+    assert not torch.allclose(goal, online)
+
+
 def test_mean_rollout_preserves_context_and_predicts_each_candidate_step():
     torch.manual_seed(0)
     model = _model()
