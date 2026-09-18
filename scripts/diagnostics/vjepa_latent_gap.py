@@ -17,6 +17,7 @@ Example::
 from __future__ import annotations
 
 import argparse
+import random
 from pathlib import Path
 
 import stable_pretraining as spt
@@ -31,6 +32,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--checkpoint', required=True)
     parser.add_argument('--dataset', required=True)
     parser.add_argument('--num-samples', type=int, default=32)
+    parser.add_argument(
+        '--seed',
+        type=int,
+        default=42,
+        help='Seed for deterministic sampling across the full dataset.',
+    )
     parser.add_argument('--device', default='cuda')
     parser.add_argument('--img-size', type=int, default=224)
     return parser.parse_args()
@@ -45,14 +52,14 @@ def make_transform(img_size: int):
     ])
 
 
-def collect_features(model, dataset, transform, num_samples, device):
+def collect_features(model, dataset, transform, indices, device):
     online_raw = []
     ema_raw = []
     online_latent = []
     ema_latent = []
 
     with torch.no_grad():
-        for index in range(num_samples):
+        for index in indices:
             pixels = dataset[index]['pixels']
             # Lance returns a temporal clip.  Transform each frame before
             # adding the batch dimension expected by _encode_pixels().
@@ -122,14 +129,21 @@ def main() -> None:
         keys_to_cache=['pixels'],
     )
     num_samples = min(args.num_samples, len(dataset))
+    # Dense video datasets contain strongly overlapping adjacent clips.
+    # Sampling dataset[0:N] would therefore underestimate representation
+    # diversity and could falsely look like collapse.  Draw indices from the
+    # full table with a fixed seed so runs remain reproducible.
+    indices = random.Random(args.seed).sample(range(len(dataset)), num_samples)
     transform = make_transform(args.img_size)
     features = collect_features(
-        model, dataset, transform, num_samples, device
+        model, dataset, transform, indices, device
     )
 
     print(f'checkpoint: {args.checkpoint}')
     print(f'dataset: {args.dataset}')
     print(f'samples: {num_samples}')
+    print(f'sampling seed: {args.seed}')
+    print(f'index range: {min(indices)}..{max(indices)}')
     report('encoder CLS before projector', features[0], features[1])
     report('latent after projector', features[2], features[3])
 
