@@ -27,11 +27,17 @@ def get_img_preprocessor(source: str, target: str, img_size: int = 224):
     return dt.transforms.Compose(to_image, resize)
 
 
-class TargetEMACallback(Callback):
-    """Update the target-mean encoder after each optimizer step."""
+class VJEPAModule(spt.Module):
+    """Stable-pretraining module with EMA tied to the optimizer step."""
 
-    def on_before_zero_grad(self, trainer, pl_module, optimizer):
-        pl_module.model.update_target()
+    def optimizer_step(self, *args, **kwargs):
+        # Calling super first guarantees that the EMA observes the newly
+        # optimized online weights.  Keeping this update in optimizer_step
+        # also respects gradient accumulation: one EMA update is performed
+        # for each real optimizer step, not for every training batch.
+        result = super().optimizer_step(*args, **kwargs)
+        self.model.update_target()
+        return result
 
 
 class SaveCkptCallback(Callback):
@@ -195,7 +201,7 @@ def run(cfg):
             'interval': 'epoch',
         }
     }
-    module = spt.Module(
+    module = VJEPAModule(
         model=model,
         sigreg=SIGReg(**cfg.loss.sigreg.kwargs),
         forward=partial(vjepa_forward, cfg=cfg),
@@ -234,7 +240,6 @@ def run(cfg):
     trainer = pl.Trainer(
         **cfg.trainer,
         callbacks=[
-            TargetEMACallback(),
             SaveCkptCallback(
                 run_name=cfg.output_model_name,
                 cfg=cfg.model,
