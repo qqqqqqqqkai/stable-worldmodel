@@ -1,4 +1,4 @@
-"""Compare VJEPA representation diversity across training checkpoints.
+"""Compare representation diversity across world-model checkpoints.
 
 The same randomly selected clips are encoded at several training stages.  The
 comparison answers whether representation collapse was already present in the
@@ -13,9 +13,14 @@ Example::
         --checkpoint epoch63=vjepa_beta2_epoch63/weights_epoch_63.pt \
         --dataset /stable_wm/stablewm_data/datasets/pusht_expert_train.lance
 
+VJEPA checkpoints report both online and EMA branches.  Models such as LEWM
+that do not have an EMA branch report ``N/A`` for the two EMA columns, while
+their online encoder/projector statistics remain directly comparable.
+
 The ``random`` label is special: it loads the first checkpoint's architecture,
-resets trainable parameters, and makes the EMA copies equal to the online
-copies.  Thus it is a random-initialization control, not a trained checkpoint.
+resets trainable parameters, and, when present, makes the EMA copies equal to
+the online copies.  Thus it is a random-initialization control, not a trained
+checkpoint.
 """
 
 from __future__ import annotations
@@ -67,20 +72,25 @@ def make_transform(img_size: int):
     ])
 
 
-def randomize_model(model: torch.nn.Module) -> torch.nn.Module:
+def randomize_model(model: torch.nn.Module, seed: int) -> torch.nn.Module:
     """Reset the architecture while keeping online and EMA branches aligned."""
     model = copy.deepcopy(model)
+    torch.manual_seed(seed)
     model.apply(lambda module: module.reset_parameters()
                 if hasattr(module, 'reset_parameters') else None)
-    with torch.no_grad():
-        model.target_encoder.load_state_dict(model.encoder.state_dict())
-        model.target_projector.load_state_dict(model.projector.state_dict())
+    if hasattr(model, 'target_encoder'):
+        with torch.no_grad():
+            model.target_encoder.load_state_dict(model.encoder.state_dict())
+            model.target_projector.load_state_dict(
+                model.projector.state_dict()
+            )
     return model
 
 
 def measure(model, dataset, transform, indices, device):
     online_raw, ema_raw = [], []
     online_latent, ema_latent = [], []
+    has_ema = hasattr(model, 'target_encoder')
     model = model.to(device).eval()
     with torch.no_grad():
         for index in indices:
@@ -90,21 +100,41 @@ def measure(model, dataset, transform, indices, device):
             online_output = model.encoder(
                 pixels, interpolate_pos_encoding=True
             )
-            ema_output = model.target_encoder(
-                pixels, interpolate_pos_encoding=True
-            )
             online_cls = online_output.last_hidden_state[:, 0]
-            ema_cls = ema_output.last_hidden_state[:, 0]
             online_raw.append(online_cls.cpu())
-            ema_raw.append(ema_cls.cpu())
             online_latent.append(model.projector(online_cls).cpu())
-            ema_latent.append(model.target_projector(ema_cls).cpu())
+            if has_ema:
+                ema_output = model.target_encoder(
+                    pixels, interpolate_pos_encoding=True
+                )
+                ema_cls = ema_output.last_hidden_state[:, 0]
+                ema_raw.append(ema_cls.cpu())
+                ema_latent.append(model.target_projector(ema_cls).cpu())
 
-    values = [
-        torch.cat(value).float()
-        for value in (online_raw, ema_raw, online_latent, ema_latent)
-    ]
-    return tuple(value.std(dim=0).mean().item() for value in values)
+    online_encoder_std = torch.cat(online_raw).float().std(dim=0).mean()
+    online_projector_std = (
+        torch.cat(online_latent).float().std(dim=0).mean()
+    )
+    if not has_ema:
+        return (
+            online_encoder_std.item(),
+            None,
+            online_projector_std.item(),
+            None,
+        )
+
+    ema_encoder_std = torch.cat(ema_raw).float().std(dim=0).mean()
+    ema_projector_std = torch.cat(ema_latent).float().std(dim=0).mean()
+    return (
+        online_encoder_std.item(),
+        ema_encoder_std.item(),
+        online_projector_std.item(),
+        ema_projector_std.item(),
+    )
+
+
+def format_stat(value: float | None) -> str:
+    return 'N/A' if value is None else f'{value:.8f}'
 
 
 def main() -> None:
@@ -134,14 +164,12 @@ def main() -> None:
 
     for label, checkpoint in entries:
         model = (
-            randomize_model(first_model)
+            randomize_model(first_model, args.seed)
             if label == 'random'
             else swm.wm.utils.load_pretrained(checkpoint)
         )
         stats = measure(model, dataset, transform, indices, device)
-        print(
-            f'{label}\t' + '\t'.join(f'{value:.8f}' for value in stats)
-        )
+        print(f'{label}\t' + '\t'.join(map(format_stat, stats)))
 
 
 if __name__ == '__main__':
