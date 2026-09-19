@@ -13,6 +13,7 @@ from omegaconf import OmegaConf, open_dict
 from stable_pretraining import data as dt
 
 from stable_worldmodel.data import column_normalizer as get_column_normalizer
+from stable_worldmodel.wm.loss import SIGReg
 from stable_worldmodel.wm.utils import save_pretrained
 from stable_worldmodel.wm.vjepa.module import gaussian_nll, unit_gaussian_kl
 
@@ -63,6 +64,9 @@ def vjepa_forward(self, batch, stage, cfg):
     context_length = cfg.wm.history_size
     prediction_offset = cfg.wm.num_preds
     beta = cfg.loss.beta
+    sigreg_cfg = cfg.loss.get('sigreg', {})
+    sigreg_enabled = sigreg_cfg.get('enabled', False)
+    sigreg_weight = sigreg_cfg.get('weight', 0.0)
 
     action = torch.nan_to_num(batch['action'], 0.0)
     context = {
@@ -83,7 +87,11 @@ def vjepa_forward(self, batch, stage, cfg):
     kl = unit_gaussian_kl(target_mean, target_log_var)
     nll_loss = nll.mean()
     kl_loss = kl.mean()
-    loss = nll_loss + beta * kl_loss
+    if sigreg_enabled:
+        sigreg_loss = self.sigreg(context['emb'].transpose(0, 1))
+    else:
+        sigreg_loss = nll_loss.new_zeros(())
+    loss = nll_loss + beta * kl_loss + sigreg_weight * sigreg_loss
 
     lower = self.model.pred_log_var_head.log_var_min
     upper = self.model.pred_log_var_head.log_var_max
@@ -93,6 +101,8 @@ def vjepa_forward(self, batch, stage, cfg):
         'nll_loss': nll_loss,
         'kl_loss': kl_loss,
         'weighted_kl_loss': beta * kl_loss,
+        'sigreg_loss': sigreg_loss,
+        'weighted_sigreg_loss': sigreg_weight * sigreg_loss,
         'pred_mse': (pred_mean.float() - target.float()).square().mean(),
         'target_mean_std': target_mean.float().std(),
         'pred_mean_std': pred_mean.float().std(),
@@ -187,6 +197,7 @@ def run(cfg):
     }
     module = spt.Module(
         model=model,
+        sigreg=SIGReg(**cfg.loss.sigreg.kwargs),
         forward=partial(vjepa_forward, cfg=cfg),
         optim=optimizers,
     )

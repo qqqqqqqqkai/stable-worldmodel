@@ -98,3 +98,9 @@ model:
 
 loss:
   beta: 0.01
+  sigreg:
+    enabled: true
+    weight: 0.09
+    kwargs:
+      knots: 17
+      num_proj: 1024
