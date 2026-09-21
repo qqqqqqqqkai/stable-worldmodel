@@ -27,17 +27,31 @@ def get_img_preprocessor(source: str, target: str, img_size: int = 224):
     return dt.transforms.Compose(to_image, resize)
 
 
-class VJEPAModule(spt.Module):
-    """Stable-pretraining module with EMA tied to the optimizer step."""
+class TargetEMACallback(Callback):
+    """Update the EMA target after each completed training batch."""
 
-    def optimizer_step(self, *args, **kwargs):
-        # Calling super first guarantees that the EMA observes the newly
-        # optimized online weights.  Keeping this update in optimizer_step
-        # also respects gradient accumulation: one EMA update is performed
-        # for each real optimizer step, not for every training batch.
-        result = super().optimizer_step(*args, **kwargs)
-        self.model.update_target()
-        return result
+    def __init__(self):
+        super().__init__()
+        self.updates = 0
+
+    def on_train_batch_end(
+        self, trainer, pl_module, outputs, batch, batch_idx
+    ):
+        # stable_pretraining owns its optimization loop, so Lightning's
+        # optimizer_step/on_before_zero_grad integration points are not
+        # reliable here.  on_train_batch_end runs after that loop completes.
+        # VJEPA currently performs one optimizer step per training batch.
+        pl_module.model.update_target()
+        self.updates += 1
+
+    def on_train_epoch_end(self, trainer, pl_module):
+        if trainer.is_global_zero:
+            print(
+                f'[VJEPA EMA] epoch={trainer.current_epoch + 1} '
+                f'updates={self.updates}',
+                flush=True,
+            )
+        self.updates = 0
 
 
 class SaveCkptCallback(Callback):
@@ -139,6 +153,12 @@ def vjepa_forward(self, batch, stage, cfg):
 
 @hydra.main(version_base=None, config_path='./config', config_name='vjepa')
 def run(cfg):
+    accumulate_grad_batches = cfg.trainer.get('accumulate_grad_batches', 1)
+    if accumulate_grad_batches != 1:
+        raise ValueError(
+            'VJEPA EMA currently requires trainer.accumulate_grad_batches=1'
+        )
+
     dataset_cfg = OmegaConf.to_container(cfg.data.dataset, resolve=True)
     dataset_name = dataset_cfg.pop('name')
     cache_dir = os.environ.get('LOCAL_DATASET_DIR', None)
@@ -201,7 +221,7 @@ def run(cfg):
             'interval': 'epoch',
         }
     }
-    module = VJEPAModule(
+    module = spt.Module(
         model=model,
         sigreg=SIGReg(**cfg.loss.sigreg.kwargs),
         forward=partial(vjepa_forward, cfg=cfg),
@@ -240,6 +260,7 @@ def run(cfg):
     trainer = pl.Trainer(
         **cfg.trainer,
         callbacks=[
+            TargetEMACallback(),
             SaveCkptCallback(
                 run_name=cfg.output_model_name,
                 cfg=cfg.model,
