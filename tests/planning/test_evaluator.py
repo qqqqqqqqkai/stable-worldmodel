@@ -233,6 +233,37 @@ def test_evaluator_uses_selected_rollout_method():
     assert costs.shape == (B, S)
 
 
+def test_evaluator_expands_and_reduces_best_particle_cost():
+    model = FakeLeWM()
+    seen = []
+    original_rollout = model.rollout
+
+    def rollout(info_dict, action_candidates):
+        seen.append(action_candidates.shape)
+        return original_rollout(info_dict, action_candidates)
+
+    model.rollout_particles = rollout
+    evaluator = ShootingCostEvaluator(
+        model,
+        GoalMSE(),
+        rollout_method='rollout_particles',
+        num_particles=4,
+        particle_reduction='min',
+    )
+    costs = evaluator.get_cost(_make_info_dict(), _make_action_candidates())
+
+    assert seen == [(B, S * 4, H, A)]
+    assert costs.shape == (B, S)
+
+    particle_costs = torch.tensor(
+        [[4.0, 1.0, 3.0, 2.0, 8.0, 7.0, 6.0, 5.0]]
+    )
+    torch.testing.assert_close(
+        evaluator._reduce_particle_costs(particle_costs),
+        torch.tensor([[1.0, 5.0]]),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Integration: solve end-to-end through the unmodified solvers
 # ---------------------------------------------------------------------------

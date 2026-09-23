@@ -135,6 +135,8 @@ class ShootingCostEvaluator(torch.nn.Module):
         encode_goal: Callable[[Dynamics, dict], torch.Tensor]
         | None = default_goal_encode,
         rollout_method: str = 'rollout',
+        num_particles: int = 1,
+        particle_reduction: str = 'min',
     ) -> None:
         super().__init__()
         self.model = model
@@ -142,6 +144,12 @@ class ShootingCostEvaluator(torch.nn.Module):
         self.constraints = constraints
         self.encode_goal = encode_goal
         self.rollout_method = rollout_method
+        if num_particles < 1:
+            raise ValueError('num_particles must be positive')
+        if particle_reduction not in ('min', 'mean'):
+            raise ValueError("particle_reduction must be 'min' or 'mean'")
+        self.num_particles = num_particles
+        self.particle_reduction = particle_reduction
         if not callable(getattr(model, rollout_method, None)):
             raise ValueError(
                 f'{type(model).__name__} has no callable '
@@ -161,10 +169,36 @@ class ShootingCostEvaluator(torch.nn.Module):
         if self.encode_goal is not None and 'goal_emb' not in info_dict:
             info_dict['goal_emb'] = self.encode_goal(self.model, info_dict)
 
+        if self.num_particles > 1:
+            num_candidates = action_candidates.size(1)
+            info_dict = {
+                key: (
+                    value.repeat_interleave(self.num_particles, dim=1)
+                    if (
+                        torch.is_tensor(value)
+                        and value.ndim >= 2
+                        and value.size(1) == num_candidates
+                    )
+                    else value
+                )
+                for key, value in info_dict.items()
+            }
+            action_candidates = action_candidates.repeat_interleave(
+                self.num_particles, dim=1
+            )
+
         rollout = getattr(self.model, self.rollout_method)
         info_dict = rollout(info_dict, action_candidates)
         info_dict['action_candidates'] = action_candidates
         return info_dict
+
+    def _reduce_particle_costs(self, costs: torch.Tensor) -> torch.Tensor:
+        if self.num_particles == 1:
+            return costs
+        costs = costs.unflatten(1, (-1, self.num_particles))
+        if self.particle_reduction == 'min':
+            return costs.min(dim=-1).values
+        return costs.mean(dim=-1)
 
     def criterion(
         self,
@@ -174,14 +208,14 @@ class ShootingCostEvaluator(torch.nn.Module):
         """Score an already-rolled-out ``info_dict`` with the objective."""
         if action_candidates is not None:
             info_dict['action_candidates'] = action_candidates
-        return self.objective(info_dict)
+        return self._reduce_particle_costs(self.objective(info_dict))
 
     def get_cost(
         self, info_dict: dict, action_candidates: torch.Tensor
     ) -> torch.Tensor:
         """Encode goal (if needed), roll out candidates, then score them."""
         info_dict = self._rollout(info_dict, action_candidates)
-        return self.objective(info_dict)
+        return self._reduce_particle_costs(self.objective(info_dict))
 
     def _get_constraints(
         self, info_dict: dict, action_candidates: torch.Tensor

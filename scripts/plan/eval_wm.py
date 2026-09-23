@@ -130,6 +130,8 @@ def run(cfg: DictConfig):
             model,
             objective,
             rollout_method=cfg.get('rollout_method', 'rollout'),
+            num_particles=cfg.get('num_particles', 1),
+            particle_reduction=cfg.get('particle_reduction', 'min'),
         )
         solver = hydra.utils.instantiate(cfg.solver, cost=cost)
         policy = swm.policy.WorldModelPolicy(
