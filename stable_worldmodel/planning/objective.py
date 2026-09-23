@@ -81,6 +81,41 @@ class GoalMSE(nn.Module):
         )
 
 
+class CumulativeGoalMSE(GoalMSE):
+    """Sum goal distance over predicted rollout steps.
+
+    The initial context is excluded using ``history_size``.  This matches the
+    cumulative trajectory cost in VJEPA-MPC while retaining GoalMSE's choice
+    of keys and latent-dimension reduction.
+    """
+
+    def __init__(self, history_size: int = 3, **kwargs) -> None:
+        super().__init__(**kwargs)
+        if history_size < 1:
+            raise ValueError('history_size must be positive')
+        self.history_size = history_size
+
+    def forward(self, info_dict: dict) -> torch.Tensor:
+        pred_emb = info_dict[self.pred_key][:, :, self.history_size :]
+        if pred_emb.size(2) == 0:
+            raise ValueError('rollout contains no predicted steps')
+        goal = info_dict[self.goal_key][:, None, -1:]
+        goal = goal.expand(
+            pred_emb.size(0),
+            pred_emb.size(1),
+            pred_emb.size(2),
+            *pred_emb.shape[3:],
+        )
+        err = F.mse_loss(pred_emb, goal.detach(), reduction='none')
+        feature_dims = tuple(range(3, pred_emb.ndim))
+        step_cost = (
+            err.sum(dim=feature_dims)
+            if self.reduction == 'sum'
+            else err.mean(dim=feature_dims)
+        )
+        return step_cost.sum(dim=2)
+
+
 class ControlPenalty(nn.Module):
     """L2 penalty on the action candidates themselves.
 

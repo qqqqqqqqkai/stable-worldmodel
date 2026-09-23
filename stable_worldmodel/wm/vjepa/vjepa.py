@@ -200,5 +200,78 @@ class VJEPA(nn.Module):
         )
         return info
 
+    def rollout_stochastic(
+        self,
+        info: dict,
+        action_sequence: torch.Tensor,
+        history_size: int | None = None,
+    ) -> dict:
+        """Sample one latent trajectory for every candidate action sequence.
+
+        This implements the stochastic dynamics rollout used by VJEPA-MPC:
+        each candidate receives independent Gaussian noise at every horizon
+        step, and the sampled state is recursively fed back as context.
+        """
+        if history_size is None:
+            history_size = getattr(self.predictor, 'num_frames', 3)
+
+        assert 'pixels' in info, 'pixels not in info_dict'
+        n_context = info['pixels'].size(2)
+        batch_size, n_candidates, horizon = action_sequence.shape[:3]
+        action_history = info.get('action_history')
+        if action_history is None:
+            action_history = action_sequence.new_zeros(
+                batch_size,
+                n_candidates,
+                0,
+                action_sequence.size(-1),
+            )
+        assert action_history.size(2) == n_context - 1, (
+            f'action_history must hold H-1={n_context - 1} executed blocks, '
+            f'got {action_history.size(2)}'
+        )
+        info['action'] = torch.cat(
+            [action_history, action_sequence[:, :, :1]], dim=2
+        )
+
+        if 'emb' not in info:
+            initial = {
+                key: value[:, 0]
+                for key, value in info.items()
+                if torch.is_tensor(value)
+            }
+            initial = self.encode(initial)
+            info['emb'] = (
+                initial['emb']
+                .detach()
+                .unsqueeze(1)
+                .expand(batch_size, n_candidates, -1, -1)
+            )
+
+        initial_emb = rearrange(info['emb'], 'b s ... -> (b s) ...')
+        past_flat = rearrange(action_history, 'b s ... -> (b s) ...')
+        candidates_flat = rearrange(action_sequence, 'b s ... -> (b s) ...')
+        all_action_emb = self.action_encoder(
+            torch.cat([past_flat, candidates_flat], dim=1)
+        )
+
+        embeddings = list(initial_emb.unbind(dim=1))
+        for step in range(horizon):
+            lower = max(0, n_context + step - history_size)
+            context = torch.stack(embeddings[lower:], dim=1)
+            actions = all_action_emb[:, lower : n_context + step]
+            mean, log_var = self.predict_distribution(context, actions)
+            sampled = reparameterize(mean[:, -1], log_var[:, -1])
+            embeddings.append(sampled)
+
+        rollout = torch.stack(embeddings, dim=1)
+        info['predicted_emb'] = rearrange(
+            rollout,
+            '(b s) ... -> b s ...',
+            b=batch_size,
+            s=n_candidates,
+        )
+        return info
+
 
 __all__ = ['VJEPA']

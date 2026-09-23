@@ -66,6 +66,7 @@ def get_dataset(cfg, dataset_name):
 @hydra.main(version_base=None, config_path='./config', config_name='pusht')
 def run(cfg: DictConfig):
     """Run evaluation of dinowm vs random policy."""
+    torch.manual_seed(cfg.seed)
     assert (
         cfg.plan_config.horizon * cfg.plan_config.action_block
         <= cfg.eval.eval_budget
@@ -125,7 +126,11 @@ def run(cfg: DictConfig):
             model.predictor = torch.compile(model.predictor)
         config = swm.PlanConfig(**cfg.plan_config)
         objective = hydra.utils.instantiate(cfg.objective)
-        cost = swm.planning.ShootingCostEvaluator(model, objective)
+        cost = swm.planning.ShootingCostEvaluator(
+            model,
+            objective,
+            rollout_method=cfg.get('rollout_method', 'rollout'),
+        )
         solver = hydra.utils.instantiate(cfg.solver, cost=cost)
         policy = swm.policy.WorldModelPolicy(
             solver=solver, config=config, process=process, transform=transform

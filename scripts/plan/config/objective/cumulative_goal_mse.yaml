@@ -1,0 +1,2 @@
+_target_: stable_worldmodel.planning.CumulativeGoalMSE
+history_size: ${plan_config.history_len}

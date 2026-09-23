@@ -223,6 +223,16 @@ def test_get_constraints_stacks_terms():
     assert constraints.shape == (B, S, 2)
 
 
+def test_evaluator_uses_selected_rollout_method():
+    model = FakeLeWM()
+    model.rollout_alternative = model.rollout
+    evaluator = ShootingCostEvaluator(
+        model, GoalMSE(), rollout_method='rollout_alternative'
+    )
+    costs = evaluator.get_cost(_make_info_dict(), _make_action_candidates())
+    assert costs.shape == (B, S)
+
+
 # ---------------------------------------------------------------------------
 # Integration: solve end-to-end through the unmodified solvers
 # ---------------------------------------------------------------------------

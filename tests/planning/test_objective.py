@@ -13,6 +13,7 @@ import torch.nn.functional as F
 
 from stable_worldmodel.planning import (
     ControlPenalty,
+    CumulativeGoalMSE,
     GoalMSE,
     WeightedSum,
 )
@@ -30,6 +31,21 @@ def test_goal_mse_formula():
     expected = F.mse_loss(
         pred[..., -1:, :], goal_b[..., -1:, :], reduction='none'
     ).sum(dim=tuple(range(2, pred.ndim)))
+    torch.testing.assert_close(out, expected)
+
+
+def test_cumulative_goal_mse_excludes_context_and_sums_horizon():
+    history_size = 3
+    pred = torch.randn(B, S, history_size + H, D)
+    goal = torch.randn(B, 1, D)
+    out = CumulativeGoalMSE(history_size=history_size)(
+        {'predicted_emb': pred, 'goal_emb': goal}
+    )
+
+    future = pred[:, :, history_size:]
+    goal_b = goal[:, None].expand_as(future)
+    expected = F.mse_loss(future, goal_b, reduction='none').sum(dim=3)
+    expected = expected.sum(dim=2)
     torch.testing.assert_close(out, expected)
 
 

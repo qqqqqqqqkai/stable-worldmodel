@@ -194,3 +194,26 @@ def test_mean_rollout_preserves_context_and_predicts_each_candidate_step():
     )
     assert output['action'].shape == (batch_size, candidates, context_len, 2)
     assert torch.isfinite(output['predicted_emb']).all()
+
+
+def test_stochastic_rollout_samples_each_candidate_step():
+    torch.manual_seed(0)
+    model = _model()
+    batch_size, candidates, context_len, horizon = 1, 3, 3, 4
+    pixels = torch.randn(batch_size, 1, context_len, 3, 8, 8)
+    info = {
+        'pixels': pixels.expand(-1, candidates, -1, -1, -1, -1),
+        'action_history': torch.zeros(batch_size, candidates, 2, 2),
+    }
+    actions = torch.zeros(batch_size, candidates, horizon, 2)
+
+    torch.manual_seed(123)
+    first = model.rollout_stochastic(dict(info), actions)['predicted_emb']
+    torch.manual_seed(123)
+    second = model.rollout_stochastic(dict(info), actions)['predicted_emb']
+
+    torch.testing.assert_close(first, second)
+    assert first.shape == (1, candidates, context_len + horizon, 4)
+    assert not torch.allclose(
+        first[:, 0, context_len:], first[:, 1, context_len:]
+    )

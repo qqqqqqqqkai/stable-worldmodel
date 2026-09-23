@@ -134,12 +134,19 @@ class ShootingCostEvaluator(torch.nn.Module):
         constraints: list[Objective] | None = None,
         encode_goal: Callable[[Dynamics, dict], torch.Tensor]
         | None = default_goal_encode,
+        rollout_method: str = 'rollout',
     ) -> None:
         super().__init__()
         self.model = model
         self.objective = objective
         self.constraints = constraints
         self.encode_goal = encode_goal
+        self.rollout_method = rollout_method
+        if not callable(getattr(model, rollout_method, None)):
+            raise ValueError(
+                f'{type(model).__name__} has no callable '
+                f'{rollout_method!r} rollout method'
+            )
         if constraints:
             self.get_constraints = self._get_constraints
 
@@ -154,7 +161,8 @@ class ShootingCostEvaluator(torch.nn.Module):
         if self.encode_goal is not None and 'goal_emb' not in info_dict:
             info_dict['goal_emb'] = self.encode_goal(self.model, info_dict)
 
-        info_dict = self.model.rollout(info_dict, action_candidates)
+        rollout = getattr(self.model, self.rollout_method)
+        info_dict = rollout(info_dict, action_candidates)
         info_dict['action_candidates'] = action_candidates
         return info_dict
 

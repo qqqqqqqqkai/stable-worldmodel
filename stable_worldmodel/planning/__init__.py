@@ -13,6 +13,7 @@ from stable_worldmodel.planning.evaluator import (
 )
 from stable_worldmodel.planning.objective import (
     ControlPenalty,
+    CumulativeGoalMSE,
     GoalMSE,
     WeightedSum,
 )
@@ -46,6 +47,7 @@ __all__ = [
     'CategoricalCEMSolver',
     'Constrainable',
     'ControlPenalty',
+    'CumulativeGoalMSE',
     'Costable',
     'Dynamics',
     'GoalMSE',
