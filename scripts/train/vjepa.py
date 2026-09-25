@@ -15,7 +15,11 @@ from stable_pretraining import data as dt
 from stable_worldmodel.data import column_normalizer as get_column_normalizer
 from stable_worldmodel.wm.loss import SIGReg
 from stable_worldmodel.wm.utils import save_pretrained
-from stable_worldmodel.wm.vjepa.module import gaussian_nll, unit_gaussian_kl
+from stable_worldmodel.wm.vjepa.module import (
+    gaussian_nll,
+    progressive_probability_weight,
+    unit_gaussian_kl,
+)
 
 
 def get_img_preprocessor(source: str, target: str, img_size: int = 224):
@@ -79,11 +83,12 @@ class SaveCkptCallback(Callback):
         )
 
 
-def vjepa_forward(self, batch, stage, cfg):
+def vjepa_forward(self, batch, stage, cfg, total_steps):
     """Compute the single-sample variational JEPA objective."""
     context_length = cfg.wm.history_size
     prediction_offset = cfg.wm.num_preds
     beta = cfg.loss.beta
+    progressive_cfg = cfg.loss.progressive_variance
     sigreg_cfg = cfg.loss.get('sigreg', {})
     sigreg_enabled = sigreg_cfg.get('enabled', False)
     sigreg_weight = sigreg_cfg.get('weight', 0.0)
@@ -107,17 +112,40 @@ def vjepa_forward(self, batch, stage, cfg):
     kl = unit_gaussian_kl(target_mean, target_log_var)
     nll_loss = nll.mean()
     kl_loss = kl.mean()
+    mean_loss = 0.5 * (
+        pred_mean.float() - target_mean.detach().float()
+    ).square().mean()
+    probability_weight = progressive_probability_weight(
+        step=self.global_step,
+        total_steps=total_steps,
+        warmup_fraction=progressive_cfg.warmup_fraction,
+        ramp_fraction=progressive_cfg.ramp_fraction,
+    )
+    probabilistic_loss = nll_loss + beta * kl_loss
     if sigreg_enabled:
         sigreg_loss = self.sigreg(context['emb'].transpose(0, 1))
     else:
         sigreg_loss = nll_loss.new_zeros(())
-    loss = nll_loss + beta * kl_loss + sigreg_weight * sigreg_loss
+    # Exclude the probabilistic graph entirely during warm-up. Multiplying it
+    # by zero would leave zero-valued gradients, allowing AdamW weight decay to
+    # update the variance heads before probabilistic learning begins.
+    if probability_weight == 0.0:
+        prediction_loss = mean_loss
+    else:
+        prediction_loss = (
+            (1.0 - probability_weight) * mean_loss
+            + probability_weight * probabilistic_loss
+        )
+    loss = prediction_loss + sigreg_weight * sigreg_loss
 
     lower = self.model.pred_log_var_head.log_var_min
     upper = self.model.pred_log_var_head.log_var_max
     tolerance = 0.01 * (upper - lower)
     metrics = {
         'loss': loss,
+        'mean_loss': mean_loss,
+        'probabilistic_loss': probabilistic_loss,
+        'probability_weight': loss.new_tensor(probability_weight),
         'nll_loss': nll_loss,
         'kl_loss': kl_loss,
         'weighted_kl_loss': beta * kl_loss,
@@ -224,7 +252,7 @@ def run(cfg):
     module = spt.Module(
         model=model,
         sigreg=SIGReg(**cfg.loss.sigreg.kwargs),
-        forward=partial(vjepa_forward, cfg=cfg),
+        forward=partial(vjepa_forward, cfg=cfg, total_steps=total_steps),
         optim=optimizers,
     )
     data_module = spt.data.DataModule(

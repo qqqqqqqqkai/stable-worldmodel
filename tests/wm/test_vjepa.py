@@ -8,6 +8,7 @@ from stable_worldmodel.wm.vjepa import (
     BoundedLogVariance,
     VJEPA,
     gaussian_nll,
+    progressive_probability_weight,
     reparameterize,
     unit_gaussian_kl,
 )
@@ -81,6 +82,46 @@ def test_gaussian_losses_match_torch_distributions():
     )
     expected_kl = torch.distributions.kl_divergence(distribution, prior)
     torch.testing.assert_close(unit_gaussian_kl(mean, log_var), expected_kl)
+
+
+def test_progressive_probability_weight_has_fixed_warmup_and_linear_ramp():
+    kwargs = {
+        'total_steps': 100,
+        'warmup_fraction': 0.1,
+        'ramp_fraction': 0.4,
+    }
+
+    assert progressive_probability_weight(step=0, **kwargs) == 0.0
+    assert progressive_probability_weight(step=10, **kwargs) == 0.0
+    assert math.isclose(
+        progressive_probability_weight(step=30, **kwargs), 0.5
+    )
+    assert progressive_probability_weight(step=50, **kwargs) == 1.0
+    assert progressive_probability_weight(step=100, **kwargs) == 1.0
+
+
+def test_mean_warmup_does_not_update_variance_branches():
+    pred_mean = torch.tensor([1.0], requires_grad=True)
+    pred_log_var = torch.tensor([0.0], requires_grad=True)
+    target_mean = torch.tensor([0.0])
+    target_log_var = torch.tensor([0.0], requires_grad=True)
+    target = reparameterize(
+        target_mean, target_log_var, epsilon=torch.ones_like(target_mean)
+    )
+    mean_loss = 0.5 * (pred_mean - target_mean).square().mean()
+    probabilistic_loss = gaussian_nll(
+        target, pred_mean, pred_log_var
+    ).mean() + 0.01 * unit_gaussian_kl(
+        target_mean, target_log_var
+    ).mean()
+    probability_weight = progressive_probability_weight(0, 100, 0.1, 0.4)
+
+    loss = mean_loss if probability_weight == 0.0 else probabilistic_loss
+    loss.backward()
+
+    torch.testing.assert_close(pred_mean.grad, torch.ones_like(pred_mean))
+    assert pred_log_var.grad is None
+    assert target_log_var.grad is None
 
 
 def test_reparameterize_uses_supplied_epsilon():

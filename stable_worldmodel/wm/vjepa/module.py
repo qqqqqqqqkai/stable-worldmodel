@@ -75,9 +75,33 @@ def unit_gaussian_kl(
     return 0.5 * (torch.exp(log_var) + mean.square() - 1.0 - log_var)
 
 
+def progressive_probability_weight(
+    step: int,
+    total_steps: int,
+    warmup_fraction: float,
+    ramp_fraction: float,
+) -> float:
+    """Linearly introduce the probabilistic objective after mean warm-up."""
+    if total_steps <= 0:
+        raise ValueError('total_steps must be positive')
+    if not 0.0 <= warmup_fraction <= 1.0:
+        raise ValueError('warmup_fraction must be in [0, 1]')
+    if not 0.0 < ramp_fraction <= 1.0:
+        raise ValueError('ramp_fraction must be in (0, 1]')
+    if warmup_fraction + ramp_fraction > 1.0:
+        raise ValueError('warmup_fraction + ramp_fraction must not exceed 1')
+
+    progress = float(step) / float(total_steps)
+    return max(
+        0.0,
+        min(1.0, (progress - warmup_fraction) / ramp_fraction),
+    )
+
+
 __all__ = [
     'BoundedLogVariance',
     'gaussian_nll',
+    'progressive_probability_weight',
     'reparameterize',
     'unit_gaussian_kl',
 ]

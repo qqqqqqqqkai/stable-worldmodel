@@ -98,6 +98,9 @@ model:
 
 loss:
   beta: 0.01
+  progressive_variance:
+    warmup_fraction: 0.1
+    ramp_fraction: 0.4
   sigreg:
     enabled: true
     weight: 0.09
